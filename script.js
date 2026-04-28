@@ -66,3 +66,18 @@ function acknowledge(dept) {
 function resolve(dept) {
     document.getElementById(dept + '-alert').style.display = 'none';
 }
+async function sendCameraCommand() {
+    const urlInput = document.getElementById('camera-url').value;
+    const lat = 16.4961; // You can get these from a map picker
+    const lng = 80.4994;
+
+    await fetch('https://pandora-router.onrender.com/set-camera', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            url: urlInput,
+            lat: lat,
+            lng: lng
+        })
+    });
+}
