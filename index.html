@@ -1,73 +1,54 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PANDORA | Global Command Hub</title>
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-</head>
-<body class="dark-theme">
-    <div id="login-overlay">
-        <div class="login-box">
-            <h1>PANDORA SYSTEM ACCESS</h1>
-            <input type="password" id="passkey" placeholder="ENTER ACCESS CODE">
-            <button onclick="checkLogin()">AUTHORIZE</button>
-        </div>
-    </div>
+// RESTORED WEBSOCKET LOGIC
+const ws_url = "wss://pandora-router.onrender.com"; 
+let ws;
+let isMuted = true;
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    <header>
-        <div class="header-main">
-            <h1>COMMAND HUB</h1>
-            <div class="status-group">
-                <button id="lockdown-btn" onclick="initiateLockdown()">🚨 INITIATE GLOBAL LOCKDOWN</button>
-                <div id="uplink-status">[ UPLINK STATUS: OFFLINE ]</div>
-                <button onclick="toggleAudio()" id="audio-toggle">🔇 Audio Off</button>
-            </div>
-        </div>
-    </header>
+function checkLogin() {
+    const pass = document.getElementById('passkey').value;
+    if (pass === "admin") {
+        document.getElementById('login-overlay').style.display = 'none';
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        
+        // Start Connection
+        ws = new WebSocket(ws_url);
+        
+        ws.onopen = () => {
+            document.getElementById('uplink-status').innerHTML = "<span style='color:#00ff88'>[ UPLINK STATUS: ONLINE ]</span>";
+        };
 
-    <main>
-        <section class="sidebar">
-            <div class="stats-panel">
-                <p>SYS_STABILITY: <span class="green">99.8%</span></p>
-                <p>AI_ENGINE: <span class="green">PANDORA_MP_HEAVY</span></p>
-            </div>
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            // This handles the incoming AI alerts
+            if (data.image) {
+                const img = document.getElementById('evidence-img');
+                img.src = "data:image/jpeg;base64," + data.image;
+                img.style.display = "block";
+                document.getElementById('no-feed').style.display = 'none';
+                playAlarm();
+            }
+        };
+    }
+}
 
-            <div class="config-panel">
-                <h3>SENSOR CONFIG</h3>
-                <input type="text" id="camera-url" placeholder="http://phone-ip:8080/video">
-                <button onclick="initializeAI()" class="btn-primary">INITIALIZE SAAS UPLINK</button>
-            </div>
+function initializeAI() {
+    const url = document.getElementById('camera-url').value;
+    // MATCHING THE COMMAND FORMAT THE SERVER EXPECTS
+    ws.send(JSON.stringify({ "command": "START", "url": url }));
+}
 
-            <nav class="dispatch-menu">
-                <button class="active">POLICE DISPATCH</button>
-                <button>EMS DISPATCH</button>
-                <button>HAZARD COMMAND</button>
-            </nav>
-        </section>
+function playAlarm() {
+    if (!isMuted) {
+        const osc = audioCtx.createOscillator();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+        osc.connect(audioCtx.destination);
+        osc.start();
+        setTimeout(() => osc.stop(), 500);
+    }
+}
 
-        <section class="viewport">
-            <div class="video-container">
-                <h3>AI EVIDENCE SNAPSHOT</h3>
-                <div id="snapshot-feed">
-                    <img id="evidence-img" src="" style="display:none; width:100%;">
-                    <div id="no-feed">WAITING FOR UPLINK...</div>
-                </div>
-                <div class="action-bar">
-                    <button class="btn-dark" onclick="clearAlert()">ACKNOWLEDGE</button>
-                    <button class="btn-success" onclick="clearAlert()">RESOLVE INCIDENT</button>
-                </div>
-            </div>
-
-            <div class="map-container">
-                <h3>INCIDENT GEOLOCATION</h3>
-                <div id="map"></div>
-            </div>
-        </section>
-    </main>
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="script.js"></script>
-</body>
-</html>
+function toggleAudio() {
+    isMuted = !isMuted;
+    document.getElementById('audio-toggle').innerText = isMuted ? "Audio Off" : "Audio On";
+}s
