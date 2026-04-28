@@ -52,7 +52,12 @@ ws.onclose = () => {
 };
 
 // --- NEW LOCKDOWN LOGIC ---
+let isLockdownProcessing = false;
+
 function triggerLockdown() {
+    if (isLockdownProcessing) return; // Ignore if already clicking
+    isLockdownProcessing = true;
+
     isLockdownActive = !isLockdownActive;
     const btn = document.querySelector('.btn-lockdown');
 
@@ -60,17 +65,14 @@ function triggerLockdown() {
         document.body.classList.add('lockdown-mode');
         btn.innerText = "🛑 TERMINATE LOCKDOWN";
         if (!isMuted) startLockdownSiren();
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ "command": "LOCKDOWN", "active": true }));
-        }
     } else {
         document.body.classList.remove('lockdown-mode');
         btn.innerText = "🚨 INITIATE GLOBAL LOCKDOWN";
         if (lockdownOsc) { lockdownOsc.stop(); lockdownOsc = null; }
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ "command": "LOCKDOWN", "active": false }));
-        }
     }
+
+    // Reset the "Processing" flag after 1 second
+    setTimeout(() => { isLockdownProcessing = false; }, 1000);
 }
 
 function startLockdownSiren() {
@@ -107,11 +109,21 @@ function getDept(type) {
 
 function sendCameraCommand() {
     const url = document.getElementById('ip-cam-url').value;
+    if (!url) { alert("CRITICAL: PLEASE PROVIDE IP STREAM URL"); return; }
 
-    if (!url) {
-        alert("CRITICAL: PLEASE PROVIDE IP STREAM URL");
-        return;
+    // THE FIX: Changed command name to "START" to match the Python brain
+    const payload = { 
+        "command": "START", 
+        "url": url 
+    };
+
+    if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+        alert("COMMAND ROUTED: INITIALIZING CLOUD AI ON STREAM");
+    } else {
+        alert("ERROR: SERVER OFFLINE");
     }
+}
 
     // CHANGE: Changed "CHANGE_CAMERA" to "START" to match the Python backend
     const payload = {
