@@ -1,6 +1,6 @@
 // --- CONFIGURATION ---
 const RENDER_URL = "wss://pandora-router.onrender.com";
-const ws = new WebSocket(RENDER_URL);
+let ws;
 
 // --- STATE MANAGEMENT ---
 let isMuted = true;
@@ -8,8 +8,10 @@ let countdowns = {};
 let incidentLogs = [];
 let maps = { police: null, medical: null, fire: null };
 const colors = { police: "#ff0000", medical: "#00aaff", fire: "#ffaa00" };
-let isLockdownActive = false; // Added for lockdown logic
-let lockdownOsc = null;      // Added for lockdown logic
+
+// Lockdown State
+let isLockdownActive = false;
+let lockdownSiren = null;
 
 // --- AUDIO ENGINE ---
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -22,10 +24,15 @@ let activeOscillators = {};
 
 // --- AUTHENTICATION ---
 function checkLogin(e) {
-    if (e.key === "Enter") {
-        if (document.getElementById('passcode').value === "admin") {
+    // Check for both Keyboard 'Enter' and Manual Clicks
+    if (e.key === "Enter" || e.type === "click") {
+        const passValue = document.getElementById('passcode').value;
+        if (passValue === "admin") {
             document.getElementById('login-overlay').style.display = 'none';
             if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            // Connect WebSocket only AFTER login
+            connectWS();
             initMaps();
         } else {
             alert("ACCESS DENIED: INVALID KEY");
@@ -34,30 +41,37 @@ function checkLogin(e) {
 }
 
 // --- WEBSOCKET ENGINE ---
-ws.onopen = () => {
-    document.getElementById('conn-status').innerText = "[ UPLINK STATUS: ONLINE ]";
-    document.getElementById('conn-status').style.color = "#0f0";
-};
+function connectWS() {
+    ws = new WebSocket(RENDER_URL);
 
-ws.onmessage = async (event) => {
-    const data = JSON.parse(event.data);
-    if (data.alert_type) {
-        handleAlert(data);
-    }
-};
+    ws.onopen = () => {
+        const statusEl = document.getElementById('conn-status');
+        if (statusEl) {
+            statusEl.innerText = "[ UPLINK STATUS: ONLINE ]";
+            statusEl.style.color = "#0f0";
+        }
+    };
 
-ws.onclose = () => {
-    document.getElementById('conn-status').innerText = "[ UPLINK STATUS: DISCONNECTED ]";
-    document.getElementById('conn-status').style.color = "red";
-};
+    ws.onmessage = async (event) => {
+        const data = JSON.parse(event.data);
+        if (data.alert_type) {
+            handleAlert(data);
+        }
+    };
 
-// --- NEW LOCKDOWN LOGIC ---
-let isLockdownProcessing = false;
+    ws.onclose = () => {
+        const statusEl = document.getElementById('conn-status');
+        if (statusEl) {
+            statusEl.innerText = "[ UPLINK STATUS: DISCONNECTED ]";
+            statusEl.style.color = "red";
+        }
+        // Auto-reconnect loop
+        setTimeout(connectWS, 3000);
+    };
+}
 
+// --- GLOBAL LOCKDOWN TRIGGER ---
 function triggerLockdown() {
-    if (isLockdownProcessing) return; // Ignore if already clicking
-    isLockdownProcessing = true;
-
     isLockdownActive = !isLockdownActive;
     const btn = document.querySelector('.btn-lockdown');
 
@@ -68,33 +82,36 @@ function triggerLockdown() {
     } else {
         document.body.classList.remove('lockdown-mode');
         btn.innerText = "🚨 INITIATE GLOBAL LOCKDOWN";
-        if (lockdownOsc) { lockdownOsc.stop(); lockdownOsc = null; }
+        if (lockdownSiren) {
+            lockdownSiren.stop();
+            lockdownSiren = null;
+        }
     }
-
-    // Reset the "Processing" flag after 1 second
-    setTimeout(() => { isLockdownProcessing = false; }, 1000);
 }
 
 function startLockdownSiren() {
+    if (lockdownSiren) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(100, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.5);
-    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    osc.frequency.setValueAtTime(120, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
     osc.connect(gain);
     gain.connect(audioCtx.destination);
     osc.start();
-    lockdownOsc = osc;
+    lockdownSiren = osc;
 }
 
 // --- CORE LOGIC: THREAT HANDLING ---
 function handleAlert(data) {
     const dept = getDept(data.alert_type);
-    document.getElementById(`${dept}-alert`).style.display = "block";
-    document.getElementById(`${dept}-bldg`).innerText = `${data.building} - ${data.room}`;
-    document.getElementById(`${dept}-conf`).innerText = data.confidence;
+    const alertEl = document.getElementById(`${dept}-alert`);
+    if (alertEl) alertEl.style.display = "block";
+    
+    document.getElementById(`${dept}-bldg`).innerText = `${data.building || 'SITE'} - ${data.room || 'A1'}`;
+    document.getElementById(`${dept}-conf`).innerText = data.confidence || '98';
     document.getElementById(`${dept}-img`).src = `data:image/jpeg;base64,${data.image}`;
+    
     startTimer(dept);
     startAlarm(dept);
     updateMap(dept, data.lat, data.lng);
@@ -109,15 +126,13 @@ function getDept(type) {
 
 function sendCameraCommand() {
     const url = document.getElementById('ip-cam-url').value;
-    if (!url) { alert("CRITICAL: PLEASE PROVIDE IP STREAM URL"); return; }
-
-    // THE FIX: Changed command name to "START" to match the Python brain
-    const payload = { 
-        "command": "START", 
-        "url": url 
-    };
-
-    if (ws.readyState === WebSocket.OPEN) {
+    if (!url) {
+        alert("CRITICAL: PLEASE PROVIDE IP STREAM URL");
+        return;
+    }
+    // COMMAND MUST BE "START"
+    const payload = { "command": "START", "url": url };
+    if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(payload));
         alert("COMMAND ROUTED: INITIALIZING CLOUD AI ON STREAM");
     } else {
@@ -125,34 +140,21 @@ function sendCameraCommand() {
     }
 }
 
-    // CHANGE: Changed "CHANGE_CAMERA" to "START" to match the Python backend
-    const payload = {
-        "command": "START", 
-        "url": url
-    };
-
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
-        alert("COMMAND ROUTED: INITIALIZING CLOUD AI ON STREAM");
-    } else {
-        alert("ERROR: SERVER OFFLINE");
-    }
-}
-
-// --- KEEPING ALL YOUR UI FUNCTIONS ---
+// --- UI UTILITIES ---
 function startTimer(dept) {
     if (countdowns[dept]) return;
     let time = 180;
     countdowns[dept] = setInterval(() => {
+        const timerEl = document.getElementById(`${dept}-timer`);
         if (time <= 0) {
             clearInterval(countdowns[dept]);
-            document.getElementById(`${dept}-timer`).innerText = "DISPATCHED";
+            if (timerEl) timerEl.innerText = "DISPATCHED";
             return;
         }
         time--;
         let m = Math.floor(time / 60).toString().padStart(2, '0');
         let s = (time % 60).toString().padStart(2, '0');
-        document.getElementById(`${dept}-timer`).innerText = `${m}:${s}`;
+        if (timerEl) timerEl.innerText = `${m}:${s}`;
     }, 1000);
 }
 
@@ -160,14 +162,16 @@ function acknowledge(dept) {
     clearInterval(countdowns[dept]);
     countdowns[dept] = null;
     stopAlarm(dept);
-    document.getElementById(`${dept}-timer`).innerText = "ACK'D";
+    const timerEl = document.getElementById(`${dept}-timer`);
+    if (timerEl) timerEl.innerText = "ACK'D";
 }
 
 function resolve(dept) {
     clearInterval(countdowns[dept]);
     countdowns[dept] = null;
     stopAlarm(dept);
-    document.getElementById(`${dept}-alert`).style.display = "none";
+    const alertEl = document.getElementById(`${dept}-alert`);
+    if (alertEl) alertEl.style.display = "none";
 }
 
 function startAlarm(dept) {
@@ -195,14 +199,17 @@ function toggleMute() {
     document.getElementById('mute-btn').innerText = isMuted ? "🔊 Audio On" : "🔇 Mute Alarms";
     if (isMuted) {
         Object.keys(activeOscillators).forEach(stopAlarm);
-        if (lockdownOsc) { lockdownOsc.stop(); lockdownOsc = null; }
+        if (lockdownSiren) { lockdownSiren.stop(); lockdownSiren = null; }
     }
 }
 
 function initMaps() {
     ['police', 'medical', 'fire'].forEach(dept => {
-        maps[dept] = L.map(`${dept}-map`).setView([16.4961, 80.4994], 17);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(maps[dept]);
+        const mapEl = document.getElementById(`${dept}-map`);
+        if (mapEl && !maps[dept]) {
+            maps[dept] = L.map(`${dept}-map`).setView([16.4961, 80.4994], 17);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(maps[dept]);
+        }
     });
 }
 
@@ -216,7 +223,7 @@ function updateMap(dept, lat, lng) {
 function switchTab(tabId) {
     document.querySelectorAll('.tab').forEach(t => t.style.display = 'none');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById(tabId).style.display = 'flex';
+    document.getElementById(tabId).style.display = 'block';
     event.currentTarget.classList.add('active');
     setTimeout(() => { if(maps[tabId]) maps[tabId].invalidateSize(); }, 100);
 }
@@ -224,20 +231,22 @@ function switchTab(tabId) {
 function addLog(data) {
     const logEntry = document.createElement('div');
     logEntry.className = 'log-entry';
-    logEntry.innerHTML = `<b>${data.alert_type.toUpperCase()}</b><br>${data.building} Sector ${data.room}`;
+    logEntry.innerHTML = `<b>${(data.alert_type || 'THREAT').toUpperCase()}</b><br>${data.building || 'SITE'}`;
     logEntry.onclick = () => showModal(data);
-    document.getElementById('log-container').prepend(logEntry);
+    const container = document.getElementById('log-container');
+    if (container) container.prepend(logEntry);
 }
 
 function showModal(data) {
     document.getElementById('log-modal').style.display = 'flex';
-    document.getElementById('modal-title').innerText = data.alert_type.toUpperCase();
-    document.getElementById('modal-info').innerText = `Location: ${data.building} Sector ${data.room}`;
+    document.getElementById('modal-title').innerText = (data.alert_type || 'ALERT').toUpperCase();
     document.getElementById('modal-img').src = `data:image/jpeg;base64,${data.image}`;
 }
 
 function toggleTheme() {
     document.body.classList.toggle('light-mode');
     const themeBtn = document.querySelector('button[onclick="toggleTheme()"]');
-    themeBtn.innerText = document.body.classList.contains('light-mode') ? "🌙 Dark Mode" : "🌓 Light Mode";
+    if (themeBtn) {
+        themeBtn.innerText = document.body.classList.contains('light-mode') ? "🌙 Dark Mode" : "🌓 Light Mode";
+    }
 }
