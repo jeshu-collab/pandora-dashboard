@@ -5,7 +5,6 @@ let ws;
 // --- STATE MANAGEMENT ---
 let isMuted = true;
 let countdowns = {};
-let incidentLogs = [];
 let maps = { police: null, medical: null, fire: null };
 const colors = { police: "#ff0000", medical: "#00aaff", fire: "#ffaa00" };
 
@@ -14,7 +13,8 @@ let isLockdownActive = false;
 let lockdownSiren = null;
 
 // --- AUDIO ENGINE ---
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+// We create this only after a user gesture (Login) to satisfy browser security
+let audioCtx;
 const alarms = {
     police: { freq: 900, type: 'square' },
     medical: { freq: 440, type: 'sine' },
@@ -24,18 +24,25 @@ let activeOscillators = {};
 
 // --- AUTHENTICATION ---
 function checkLogin(e) {
-    // Check for both Keyboard 'Enter' and Manual Clicks
-    if (e.key === "Enter" || e.type === "click") {
+    // This handles the 'onkeyup' event from your HTML
+    if (e.key === "Enter") {
         const passValue = document.getElementById('passcode').value;
         if (passValue === "admin") {
+            // Hide overlay
             document.getElementById('login-overlay').style.display = 'none';
-            if (audioCtx.state === 'suspended') audioCtx.resume();
             
-            // Connect WebSocket only AFTER login
+            // Initialize AudioContext on user gesture
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } else if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            
             connectWS();
             initMaps();
         } else {
-            alert("ACCESS DENIED: INVALID KEY");
+            alert("ACCESS DENIED");
+            document.getElementById('passcode').value = "";
         }
     }
 }
@@ -53,19 +60,20 @@ function connectWS() {
     };
 
     ws.onmessage = async (event) => {
-        const data = JSON.parse(event.data);
-        if (data.alert_type) {
-            handleAlert(data);
+        try {
+            const data = JSON.parse(event.data);
+            if (data.alert_type) handleAlert(data);
+        } catch (err) {
+            console.error("Payload Error", err);
         }
     };
 
     ws.onclose = () => {
         const statusEl = document.getElementById('conn-status');
         if (statusEl) {
-            statusEl.innerText = "[ UPLINK STATUS: DISCONNECTED ]";
+            statusEl.innerText = "[ UPLINK STATUS: OFFLINE ]";
             statusEl.style.color = "red";
         }
-        // Auto-reconnect loop
         setTimeout(connectWS, 3000);
     };
 }
@@ -90,7 +98,7 @@ function triggerLockdown() {
 }
 
 function startLockdownSiren() {
-    if (lockdownSiren) return;
+    if (lockdownSiren || !audioCtx) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sawtooth';
@@ -109,34 +117,33 @@ function handleAlert(data) {
     if (alertEl) alertEl.style.display = "block";
     
     document.getElementById(`${dept}-bldg`).innerText = `${data.building || 'SITE'} - ${data.room || 'A1'}`;
-    document.getElementById(`${dept}-conf`).innerText = data.confidence || '98';
+    document.getElementById(`${dept}-conf`).innerText = data.confidence || '--';
     document.getElementById(`${dept}-img`).src = `data:image/jpeg;base64,${data.image}`;
     
     startTimer(dept);
     startAlarm(dept);
-    updateMap(dept, data.lat, data.lng);
+    updateMap(dept, data.lat || 16.4961, data.lng || 80.4994);
     addLog(data);
 }
 
 function getDept(type) {
     if (type.includes('fire')) return 'fire';
-    if (type.includes('medical') || type.includes('collapse')) return 'medical';
+    if (type.includes('medical')) return 'medical';
     return 'police';
 }
 
 function sendCameraCommand() {
     const url = document.getElementById('ip-cam-url').value;
-    if (!url) {
-        alert("CRITICAL: PLEASE PROVIDE IP STREAM URL");
-        return;
-    }
-    // COMMAND MUST BE "START"
+    if (!url) return alert("URL REQUIRED");
+
+    // Command fix for Render Backend
     const payload = { "command": "START", "url": url };
+    
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(payload));
-        alert("COMMAND ROUTED: INITIALIZING CLOUD AI ON STREAM");
+        alert("SAAS UPLINK INITIALIZED");
     } else {
-        alert("ERROR: SERVER OFFLINE");
+        alert("SERVER OFFLINE - RECONNECTING...");
     }
 }
 
@@ -175,7 +182,7 @@ function resolve(dept) {
 }
 
 function startAlarm(dept) {
-    if (isMuted || activeOscillators[dept]) return;
+    if (isMuted || activeOscillators[dept] || !audioCtx) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = alarms[dept].type;
@@ -229,12 +236,14 @@ function switchTab(tabId) {
 }
 
 function addLog(data) {
+    const container = document.getElementById('log-container');
+    if (!container) return;
     const logEntry = document.createElement('div');
     logEntry.className = 'log-entry';
+    logEntry.style = "padding:10px; border-bottom:1px solid #222; cursor:pointer;";
     logEntry.innerHTML = `<b>${(data.alert_type || 'THREAT').toUpperCase()}</b><br>${data.building || 'SITE'}`;
     logEntry.onclick = () => showModal(data);
-    const container = document.getElementById('log-container');
-    if (container) container.prepend(logEntry);
+    container.prepend(logEntry);
 }
 
 function showModal(data) {
@@ -245,8 +254,4 @@ function showModal(data) {
 
 function toggleTheme() {
     document.body.classList.toggle('light-mode');
-    const themeBtn = document.querySelector('button[onclick="toggleTheme()"]');
-    if (themeBtn) {
-        themeBtn.innerText = document.body.classList.contains('light-mode') ? "🌙 Dark Mode" : "🌓 Light Mode";
-    }
 }
