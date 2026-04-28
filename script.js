@@ -226,3 +226,8 @@ function toggleTheme() {
         themeBtn.innerText = "🌓 Light Mode";
     }
 }
+
+function initiateLockdown() {
+    document.body.classList.add("panic-mode");
+    alert("GLOBAL LOCKDOWN ACTIVATED");
+}
