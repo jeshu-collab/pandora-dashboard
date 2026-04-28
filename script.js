@@ -8,8 +8,10 @@ let countdowns = {};
 let incidentLogs = [];
 let maps = { police: null, medical: null, fire: null };
 const colors = { police: "#ff0000", medical: "#00aaff", fire: "#ffaa00" };
+let isLockdownActive = false; // Added for lockdown logic
+let lockdownOsc = null;      // Added for lockdown logic
 
-// --- AUDIO ENGINE (Department Specific Frequencies) ---
+// --- AUDIO ENGINE ---
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 const alarms = {
     police: { freq: 900, type: 'square' },
@@ -23,7 +25,6 @@ function checkLogin(e) {
     if (e.key === "Enter") {
         if (document.getElementById('passcode').value === "admin") {
             document.getElementById('login-overlay').style.display = 'none';
-            // Resume AudioContext after user gesture
             if (audioCtx.state === 'suspended') audioCtx.resume();
             initMaps();
         } else {
@@ -40,8 +41,6 @@ ws.onopen = () => {
 
 ws.onmessage = async (event) => {
     const data = JSON.parse(event.data);
-
-    // If it's a threat alert
     if (data.alert_type) {
         handleAlert(data);
     }
@@ -52,17 +51,48 @@ ws.onclose = () => {
     document.getElementById('conn-status').style.color = "red";
 };
 
+// --- NEW LOCKDOWN LOGIC ---
+function triggerLockdown() {
+    isLockdownActive = !isLockdownActive;
+    const btn = document.querySelector('.btn-lockdown');
+
+    if (isLockdownActive) {
+        document.body.classList.add('lockdown-mode');
+        btn.innerText = "🛑 TERMINATE LOCKDOWN";
+        if (!isMuted) startLockdownSiren();
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ "command": "LOCKDOWN", "active": true }));
+        }
+    } else {
+        document.body.classList.remove('lockdown-mode');
+        btn.innerText = "🚨 INITIATE GLOBAL LOCKDOWN";
+        if (lockdownOsc) { lockdownOsc.stop(); lockdownOsc = null; }
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ "command": "LOCKDOWN", "active": false }));
+        }
+    }
+}
+
+function startLockdownSiren() {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.5);
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    lockdownOsc = osc;
+}
+
 // --- CORE LOGIC: THREAT HANDLING ---
 function handleAlert(data) {
     const dept = getDept(data.alert_type);
-
-    // 1. Show the Alert UI
     document.getElementById(`${dept}-alert`).style.display = "block";
     document.getElementById(`${dept}-bldg`).innerText = `${data.building} - ${data.room}`;
     document.getElementById(`${dept}-conf`).innerText = data.confidence;
     document.getElementById(`${dept}-img`).src = `data:image/jpeg;base64,${data.image}`;
-
-    // 2. Start Logic
     startTimer(dept);
     startAlarm(dept);
     updateMap(dept, data.lat, data.lng);
@@ -75,21 +105,10 @@ function getDept(type) {
     return 'police';
 }
 
-// --- SAAS UPLINK COMMAND ---
 function sendCameraCommand() {
     const url = document.getElementById('ip-cam-url').value;
-
-    if (!url) {
-        alert("CRITICAL: PLEASE PROVIDE IP STREAM URL");
-        return;
-    }
-
-    const payload = {
-        "command": "CHANGE_CAMERA",
-        "type": "ip",
-        "url": url
-    };
-
+    if (!url) { alert("CRITICAL: PLEASE PROVIDE IP STREAM URL"); return; }
+    const payload = { "command": "CHANGE_CAMERA", "type": "ip", "url": url };
     if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(payload));
         alert("COMMAND ROUTED: INITIALIZING CLOUD AI ON STREAM");
@@ -98,10 +117,9 @@ function sendCameraCommand() {
     }
 }
 
-// --- UI & UTILITY FUNCTIONS ---
+// --- KEEPING ALL YOUR UI FUNCTIONS ---
 function startTimer(dept) {
-    if (countdowns[dept]) return; // LOCK: Don't reset if already running
-
+    if (countdowns[dept]) return;
     let time = 180;
     countdowns[dept] = setInterval(() => {
         if (time <= 0) {
@@ -121,7 +139,6 @@ function acknowledge(dept) {
     countdowns[dept] = null;
     stopAlarm(dept);
     document.getElementById(`${dept}-timer`).innerText = "ACK'D";
-    document.getElementById(`${dept}-timer`).style.color = "#888";
 }
 
 function resolve(dept) {
@@ -131,20 +148,15 @@ function resolve(dept) {
     document.getElementById(`${dept}-alert`).style.display = "none";
 }
 
-// --- ALARM ENGINE ---
 function startAlarm(dept) {
     if (isMuted || activeOscillators[dept]) return;
-
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-
     osc.type = alarms[dept].type;
     osc.frequency.setValueAtTime(alarms[dept].freq, audioCtx.currentTime);
-
     gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-
     osc.start();
     activeOscillators[dept] = { osc, gain };
 }
@@ -161,10 +173,10 @@ function toggleMute() {
     document.getElementById('mute-btn').innerText = isMuted ? "🔊 Audio On" : "🔇 Mute Alarms";
     if (isMuted) {
         Object.keys(activeOscillators).forEach(stopAlarm);
+        if (lockdownOsc) { lockdownOsc.stop(); lockdownOsc = null; }
     }
 }
 
-// --- MAP ENGINE ---
 function initMaps() {
     ['police', 'medical', 'fire'].forEach(dept => {
         maps[dept] = L.map(`${dept}-map`).setView([16.4961, 80.4994], 17);
@@ -175,33 +187,22 @@ function initMaps() {
 function updateMap(dept, lat, lng) {
     if (maps[dept]) {
         maps[dept].setView([lat, lng], 18);
-        L.marker([lat, lng]).addTo(maps[dept])
-            .bindPopup(`<b>INCIDENT LOCATION</b><br>${dept.toUpperCase()} UNIT REQ.`)
-            .openPopup();
+        L.marker([lat, lng]).addTo(maps[dept]).bindPopup(`<b>INCIDENT</b>`).openPopup();
     }
 }
 
-// --- TABS & LOGS ---
 function switchTab(tabId) {
     document.querySelectorAll('.tab').forEach(t => t.style.display = 'none');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById(tabId).style.display = 'block';
+    document.getElementById(tabId).style.display = 'flex';
     event.currentTarget.classList.add('active');
-    setTimeout(() => { maps[tabId].invalidateSize(); }, 100);
+    setTimeout(() => { if(maps[tabId]) maps[tabId].invalidateSize(); }, 100);
 }
 
 function addLog(data) {
     const logEntry = document.createElement('div');
-    logEntry.className = 'log-item';
-    logEntry.style.padding = "10px";
-    logEntry.style.borderBottom = "1px solid #222";
-    logEntry.style.cursor = "pointer";
-    logEntry.innerHTML = `
-        <div style="color:${colors[getDept(data.alert_type)]}; font-weight:bold; font-size:11px;">
-            ${data.alert_type.toUpperCase()}
-        </div>
-        <div style="color:#888; font-size:10px;">${new Date().toLocaleTimeString()} | ${data.building}</div>
-    `;
+    logEntry.className = 'log-entry';
+    logEntry.innerHTML = `<b>${data.alert_type.toUpperCase()}</b><br>${data.building} Sector ${data.room}`;
     logEntry.onclick = () => showModal(data);
     document.getElementById('log-container').prepend(logEntry);
 }
@@ -209,25 +210,12 @@ function addLog(data) {
 function showModal(data) {
     document.getElementById('log-modal').style.display = 'flex';
     document.getElementById('modal-title').innerText = data.alert_type.toUpperCase();
-    document.getElementById('modal-info').innerText = `Location: ${data.building} Sector ${data.room} | Confidence: ${data.confidence}%`;
+    document.getElementById('modal-info').innerText = `Location: ${data.building} Sector ${data.room}`;
     document.getElementById('modal-img').src = `data:image/jpeg;base64,${data.image}`;
 }
 
-// --- THEME TOGGLE ENGINE ---
 function toggleTheme() {
-    // This looks at the <body> tag and adds/removes the 'light-mode' class
     document.body.classList.toggle('light-mode');
-
-    // Optional: Update button text to reflect current state
     const themeBtn = document.querySelector('button[onclick="toggleTheme()"]');
-    if (document.body.classList.contains('light-mode')) {
-        themeBtn.innerText = "🌙 Dark Mode";
-    } else {
-        themeBtn.innerText = "🌓 Light Mode";
-    }
-}
-
-function initiateLockdown() {
-    document.body.classList.add("panic-mode");
-    alert("GLOBAL LOCKDOWN ACTIVATED");
+    themeBtn.innerText = document.body.classList.contains('light-mode') ? "🌙 Dark Mode" : "🌓 Light Mode";
 }
