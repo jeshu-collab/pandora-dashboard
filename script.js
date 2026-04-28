@@ -255,3 +255,36 @@ function showModal(data) {
 function toggleTheme() {
     document.body.classList.toggle('light-mode');
 }
+// ... (The rest of your code above)
+
+function addLog(data) {
+    const logEntry = document.createElement('div');
+    logEntry.className = 'log-item';
+    logEntry.style.padding = "10px";
+    logEntry.style.borderBottom = "1px solid #222";
+    logEntry.style.cursor = "pointer";
+    logEntry.innerHTML = `
+        <div style="color:${colors[getDept(data.alert_type)]}; font-weight:bold; font-size:11px;">
+            ${data.alert_type.toUpperCase()}
+        </div>
+        <div style="color:#888; font-size:10px;">${new Date().toLocaleTimeString()} | ${data.building}</div>
+    `;
+    logEntry.onclick = () => showModal(data);
+    document.getElementById('log-container').prepend(logEntry);
+}
+
+function showModal(data) {
+    document.getElementById('log-modal').style.display = 'flex';
+    document.getElementById('modal-title').innerText = data.alert_type.toUpperCase();
+    document.getElementById('modal-info').innerText = `Location: ${data.building} Sector ${data.room} | Confidence: ${data.confidence}%`;
+    document.getElementById('modal-img').src = `data:image/jpeg;base64,${data.image}`;
+}
+
+function toggleTheme() {
+    document.body.classList.toggle('light-mode');
+    const themeBtn = document.querySelector('button[onclick="toggleTheme()"]');
+    if (themeBtn) {
+        themeBtn.innerText = document.body.classList.contains('light-mode') ? "🌙 Dark Mode" : "🌓 Light Mode";
+    }
+}
+// ENSURE THERE IS NOTHING ELSE BELOW THIS LINE
