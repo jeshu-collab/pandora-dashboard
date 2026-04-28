@@ -18,14 +18,15 @@ function checkLogin(e) {
 function connectWS() {
     ws = new WebSocket(RENDER_URL);
     ws.onopen = () => {
-        document.getElementById('conn-status').innerText = "[ UPLINK: ONLINE ]";
-        document.getElementById('conn-status').style.color = "#0f0";
+        const status = document.getElementById('conn-status');
+        if (status) { status.innerText = "[ UPLINK: ONLINE ]"; status.style.color = "#0f0"; }
     };
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.alert_type) {
             let dept = data.alert_type.includes('fire') ? 'fire' : (data.alert_type.includes('medical') ? 'medical' : 'police');
-            document.getElementById(dept + '-alert').style.display = 'block';
+            const alertBox = document.getElementById(dept + '-alert');
+            if (alertBox) alertBox.style.display = 'block';
             document.getElementById(dept + '-img').src = 'data:image/jpeg;base64,' + data.image;
             if (maps[dept]) {
                 maps[dept].setView([data.lat, data.lng], 18);
@@ -34,8 +35,8 @@ function connectWS() {
         }
     };
     ws.onclose = () => {
-        document.getElementById('conn-status').innerText = "[ UPLINK: OFFLINE ]";
-        document.getElementById('conn-status').style.color = "red";
+        const status = document.getElementById('conn-status');
+        if (status) { status.innerText = "[ UPLINK: OFFLINE ]"; status.style.color = "red"; }
         setTimeout(connectWS, 3000);
     };
 }
@@ -52,7 +53,8 @@ function sendCameraCommand() {
 
 function initMaps() {
     ['police', 'medical', 'fire'].forEach(dept => {
-        if (!maps[dept]) {
+        const container = document.getElementById(dept + '-map');
+        if (container && !maps[dept]) {
             maps[dept] = L.map(dept + '-map').setView([16.4961, 80.4994], 17);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(maps[dept]);
         }
@@ -61,7 +63,8 @@ function initMaps() {
 
 function switchTab(id) {
     document.querySelectorAll('.tab').forEach(t => t.style.display = 'none');
-    document.getElementById(id).style.display = 'block';
+    const target = document.getElementById(id);
+    if (target) target.style.display = 'block';
 }
 
 function triggerLockdown() {
@@ -69,7 +72,8 @@ function triggerLockdown() {
 }
 
 function resolve(dept) {
-    document.getElementById(dept + '-alert').style.display = 'none';
+    const alertBox = document.getElementById(dept + '-alert');
+    if (alertBox) alertBox.style.display = 'none';
 }
 
 function toggleTheme() {
