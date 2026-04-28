@@ -1,54 +1,199 @@
-// RESTORED WEBSOCKET LOGIC
-const ws_url = "wss://pandora-router.onrender.com"; 
-let ws;
-let isMuted = true;
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+<!DOCTYPE html>
+<html lang="en">
 
-function checkLogin() {
-    const pass = document.getElementById('passkey').value;
-    if (pass === "admin") {
-        document.getElementById('login-overlay').style.display = 'none';
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        
-        // Start Connection
-        ws = new WebSocket(ws_url);
-        
-        ws.onopen = () => {
-            document.getElementById('uplink-status').innerHTML = "<span style='color:#00ff88'>[ UPLINK STATUS: ONLINE ]</span>";
-        };
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pandora-PRO | VIT-AP Command Center</title>
 
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            // This handles the incoming AI alerts
-            if (data.image) {
-                const img = document.getElementById('evidence-img');
-                img.src = "data:image/jpeg;base64," + data.image;
-                img.style.display = "block";
-                document.getElementById('no-feed').style.display = 'none';
-                playAlarm();
-            }
-        };
-    }
-}
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Inter:wght@400;600;800&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
-function initializeAI() {
-    const url = document.getElementById('camera-url').value;
-    // MATCHING THE COMMAND FORMAT THE SERVER EXPECTS
-    ws.send(JSON.stringify({ "command": "START", "url": url }));
-}
+  <link rel="stylesheet" href="style.css">
+</head>
 
-function playAlarm() {
-    if (!isMuted) {
-        const osc = audioCtx.createOscillator();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(440, audioCtx.currentTime);
-        osc.connect(audioCtx.destination);
-        osc.start();
-        setTimeout(() => osc.stop(), 500);
-    }
-}
+<body>
 
-function toggleAudio() {
-    isMuted = !isMuted;
-    document.getElementById('audio-toggle').innerText = isMuted ? "Audio Off" : "Audio On";
-}s
+  <div id="log-modal"
+    style="display:none; position:fixed; z-index:9999; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); align-items:center; justify-content:center;">
+    <div class="modal-content"
+      style="background:var(--panel, #111); padding:20px; border:1px solid #333; width:800px; max-width:90%;">
+      <button class="close-btn" onclick="document.getElementById('log-modal').style.display='none'"
+        style="float:right; background:red; color:white; border:none; padding:5px 10px; cursor:pointer;">✖</button>
+      <h2 id="modal-title" style="margin-top:0; color:var(--accent, #fff); font-weight:800; letter-spacing:1px;">
+        INCIDENT DETAILS</h2>
+      <p id="modal-info"
+        style="font-family: 'Fira Code', monospace; color:var(--text-muted, #aaa); border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px;">
+      </p>
+      <img id="modal-img" src=""
+        style="width:100%; max-height:400px; object-fit:contain; border:2px solid #000; background:#000; border-radius:8px;"
+        alt="IMAGE PURGED">
+    </div>
+  </div>
+
+  <div id="login-overlay"
+    style="position:fixed; z-index:10000; top:0; left:0; width:100%; height:100%; background:#000; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff;">
+    <h2 style="letter-spacing: 4px; font-weight: 800;">PANDORA-PRO V14</h2>
+    <p style="color: #0f0; font-family: 'Fira Code'; font-size: 12px;">AUTHORIZED ACCESS ONLY</p>
+    <input type="password" id="passcode" placeholder="ENTER SYSTEM KEY" onkeyup="checkLogin(event)" autofocus
+      style="padding:12px; text-align:center; background:#111; border:1px solid #0f0; color:#0f0; margin-top:20px; width: 250px; outline: none; font-family: 'Fira Code';">
+  </div>
+
+  <div id="topbar">
+    <button class="btn-lockdown" onclick="triggerLockdown()">🚨 INITIATE GLOBAL LOCKDOWN</button>
+    <span id="conn-status" style="color: #64748b; font-family:'Fira Code'; margin-left:20px; font-size: 12px;">[ UPLINK
+      STATUS: OFFLINE ]</span>
+    <button class="ctrl-btn" onclick="toggleTheme()" style="margin-left:auto;">🌓 Theme</button>
+    <button class="ctrl-btn" id="mute-btn" onclick="toggleMute()">🔊 Audio On</button>
+  </div>
+
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <h3>COMMAND HUB</h3>
+      <p style="color: #0f0; font-size: 11px;">OP: NAVADEEP & JASWANTH</p>
+    </div>
+
+    <div id="diagnostics" style="font-family:'Fira Code'; font-size:12px; margin-bottom:20px; color:#aaa;">
+      <div class="diag-row"><span>SYS_STABILITY</span> <span id="diag-cpu" style="color: #0f0;">99.8%</span></div>
+      <div class="diag-row"><span>AI_ENGINE</span> <span id="diag-yolo">PANDORA_MP_HEAVY</span></div>
+      <div class="diag-row"><span>UPLINK</span> <span id="diag-net">SECURE_WS</span></div>
+    </div>
+
+    <div
+      style="margin: 15px; padding: 15px; background: #111; border: 1px solid #333; font-family: 'Fira Code', monospace; font-size: 12px;">
+      <div style="color: #888; margin-bottom: 10px; font-weight: bold; letter-spacing: 1px;">SENSOR CONFIG</div>
+
+      <div style="color: #0f0; margin-bottom: 8px; font-weight: bold;">[ MODE: CLOUD IP ]</div>
+
+      <input type="text" id="ip-cam-url" placeholder="http://phone-ip:8080/video"
+        style="width: 100%; padding: 8px; background: #000; border: 1px solid #444; color: #0f0; margin-bottom: 10px; box-sizing: border-box; outline: none;">
+
+      <button onclick="sendCameraCommand()"
+        style="width: 100%; padding: 10px; background: #0f0; color: black; border: none; cursor: pointer; font-weight: 800; transition: 0.3s; text-transform: uppercase;">
+        Initialize SaaS Uplink
+      </button>
+    </div>
+
+    <button class="nav-btn active" onclick="switchTab('police')">🛡️ POLICE DISPATCH</button>
+    <button class="nav-btn" onclick="switchTab('medical')">⚕️ EMS DISPATCH</button>
+    <button class="nav-btn" onclick="switchTab('fire')">🔥 HAZARD COMMAND</button>
+
+    <button class="ctrl-btn" style="margin: 15px; text-align: center; width:calc(100% - 30px);" onclick="exportCSV()">⬇️
+      Export Shift Log</button>
+
+    <div id="log-container" style="flex:1; overflow-y:auto; margin-top:10px;">
+      <div
+        style="margin-bottom:10px; font-weight:800; font-family:'Inter',sans-serif; color: #fff; padding-left:15px; font-size: 12px;">
+        RECENT INCIDENTS</div>
+    </div>
+  </div>
+
+  <div id="main">
+
+    <div id="police" class="tab active">
+      <h1>Police Command</h1>
+      <div id="police-alert" class="alert-box"
+        style="display:none; padding:15px; border:2px solid red; margin-bottom:20px; background: rgba(255,0,0,0.1);">
+        <div class="title" style="color:red; font-weight:800; font-size:20px;">🚨 THREAT DETECTED: <span
+            id="police-bldg"></span></div>
+        <div class="alert-stats" style="margin-top:10px;">
+          <span style="color:#fff;">AI CONFIDENCE: <span id="police-conf" style="color:red;">--</span>%</span> |
+          <span style="color:#fff;">AUTO-DISPATCH IN: <span id="police-timer"
+              style="color:red; font-family:'Fira Code'; font-size:24px;">03:00</span></span>
+        </div>
+      </div>
+      <div class="details-box" style="display:flex; gap:20px; height:450px;">
+        <div class="panel" style="flex:1; background:#111; padding:10px; border:1px solid #333;">
+          <h3 style="margin-top:0; font-size: 14px; color: #888;">AI EVIDENCE SNAPSHOT</h3>
+          <img id="police-img" class="snapshot" onclick="this.requestFullscreen()"
+            style="width:100%; height:calc(100% - 30px); object-fit:contain; background:#000; cursor:pointer; border: 1px solid #222;">
+        </div>
+        <div class="panel" style="flex:1; background:#111; padding:10px; border:1px solid #333;">
+          <h3 style="margin-top:0; font-size: 14px; color: #888;">INCIDENT GEOLOCATION</h3>
+          <div id="police-map" class="map-container" style="width:100%; height:calc(100% - 30px); background:#222;">
+          </div>
+        </div>
+      </div>
+      <div class="action-bar" style="margin-top:20px; display:flex; gap:10px;">
+        <button class="btn-ack" onclick="acknowledge('police')"
+          style="padding:15px; flex:1; background:#222; color:#fff; border:1px solid #444; cursor:pointer; font-weight: 600;">ACKNOWLEDGE</button>
+        <button class="btn-res" onclick="resolve('police')"
+          style="padding:15px; flex:1; background:#004d00; color:#fff; border:none; cursor:pointer; font-weight: 600;">RESOLVE
+          INCIDENT</button>
+      </div>
+    </div>
+
+    <div id="medical" class="tab" style="display:none;">
+      <h1>Medical Command</h1>
+      <div id="medical-alert" class="alert-box"
+        style="display:none; padding:15px; border:2px solid #00aaff; background: rgba(0,170,255,0.1);">
+        <div class="title" style="color:#00aaff; font-weight:800; font-size:20px;">⚕️ MEDICAL EMERGENCY: <span
+            id="medical-bldg"></span></div>
+        <div class="alert-stats" style="margin-top:10px;">
+          <span style="color:#fff;">AI CONFIDENCE: <span id="medical-conf" style="color:#00aaff;">--</span>%</span> |
+          <span style="color:#fff;">AUTO-DISPATCH IN: <span id="medical-timer"
+              style="color:#00aaff; font-family:'Fira Code'; font-size:24px;">03:00</span></span>
+        </div>
+      </div>
+      <div class="details-box" style="display:flex; gap:20px; height:450px;">
+        <div class="panel" style="flex:1; background:#111; padding:10px; border:1px solid #333;">
+          <h3 style="margin-top:0; font-size: 14px; color: #888;">PATIENT SNAPSHOT</h3>
+          <img id="medical-img" class="snapshot"
+            style="width:100%; height:calc(100% - 30px); object-fit:contain; background:#000;">
+        </div>
+        <div class="panel" style="flex:1; background:#111; padding:10px; border:1px solid #333;">
+          <h3 style="margin-top:0; font-size: 14px; color: #888;">GEOLOCATION</h3>
+          <div id="medical-map" class="map-container" style="width:100%; height:calc(100% - 30px); background:#222;">
+          </div>
+        </div>
+      </div>
+      <div class="action-bar" style="margin-top:20px; display:flex; gap:10px;">
+        <button class="btn-ack" onclick="acknowledge('medical')"
+          style="padding:15px; flex:1; background:#222; color:#fff; border:1px solid #444; cursor:pointer;">ACKNOWLEDGE</button>
+        <button class="btn-res" onclick="resolve('medical')"
+          style="padding:15px; flex:1; background:#004d00; color:#fff; border:none; cursor:pointer;">RESOLVE
+          INCIDENT</button>
+      </div>
+    </div>
+
+    <div id="fire" class="tab" style="display:none;">
+      <h1>Hazard Command</h1>
+      <div id="fire-alert" class="alert-box"
+        style="display:none; padding:15px; border:2px solid #ffaa00; background: rgba(255,170,0,0.1);">
+        <div class="title" style="color:#ffaa00; font-weight:800; font-size:20px;">🔥 THERMAL ANOMALY: <span
+            id="fire-bldg"></span></div>
+        <div class="alert-stats" style="margin-top:10px;">
+          <span style="color:#fff;">AI CONFIDENCE: <span id="fire-conf" style="color:#ffaa00;">--</span>%</span> |
+          <span style="color:#fff;">AUTO-DISPATCH IN: <span id="fire-timer"
+              style="color:#ffaa00; font-family:'Fira Code'; font-size:24px;">03:00</span></span>
+        </div>
+      </div>
+      <div class="details-box" style="display:flex; gap:20px; height:450px;">
+        <div class="panel" style="flex:1; background:#111; padding:10px; border:1px solid #333;">
+          <h3 style="margin-top:0; font-size: 14px; color: #888;">THERMAL SNAPSHOT</h3>
+          <img id="fire-img" class="snapshot"
+            style="width:100%; height:calc(100% - 30px); object-fit:contain; background:#000;">
+        </div>
+        <div class="panel" style="flex:1; background:#111; padding:10px; border:1px solid #333;">
+          <h3 style="margin-top:0; font-size: 14px; color: #888;">GEOLOCATION</h3>
+          <div id="fire-map" class="map-container" style="width:100%; height:calc(100% - 30px); background:#222;"></div>
+        </div>
+      </div>
+      <div class="action-bar" style="margin-top:20px; display:flex; gap:10px;">
+        <button class="btn-ack" onclick="acknowledge('fire')"
+          style="padding:15px; flex:1; background:#222; color:#fff; border:1px solid #444; cursor:pointer;">ACKNOWLEDGE</button>
+        <button class="btn-res" onclick="resolve('fire')"
+          style="padding:15px; flex:1; background:#004d00; color:#fff; border:none; cursor:pointer;">RESOLVE
+          INCIDENT</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+
+</html>
