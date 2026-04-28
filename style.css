@@ -496,3 +496,13 @@
          background: #450a0a;
      }
  }
+
+@keyframes panic-flash {
+    0% { background-color: #0a0a12; }
+    50% { background-color: #440000; }
+    100% { background-color: #0a0a12; }
+}
+
+.panic-mode {
+    animation: panic-flash 0.5s infinite !important;
+}
