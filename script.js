@@ -107,8 +107,18 @@ function getDept(type) {
 
 function sendCameraCommand() {
     const url = document.getElementById('ip-cam-url').value;
-    if (!url) { alert("CRITICAL: PLEASE PROVIDE IP STREAM URL"); return; }
-    const payload = { "command": "CHANGE_CAMERA", "type": "ip", "url": url };
+
+    if (!url) {
+        alert("CRITICAL: PLEASE PROVIDE IP STREAM URL");
+        return;
+    }
+
+    // CHANGE: Changed "CHANGE_CAMERA" to "START" to match the Python backend
+    const payload = {
+        "command": "START", 
+        "url": url
+    };
+
     if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(payload));
         alert("COMMAND ROUTED: INITIALIZING CLOUD AI ON STREAM");
