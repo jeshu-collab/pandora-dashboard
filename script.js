@@ -49,15 +49,44 @@ function checkLogin(e) {
 
 // --- WEBSOCKET ENGINE ---
 function connectWS() {
+    // FORCE the connection - no extra slashes or paths
     ws = new WebSocket(RENDER_URL);
 
     ws.onopen = () => {
+        console.log("SUCCESS: Cloud Bridge Established");
         const statusEl = document.getElementById('conn-status');
         if (statusEl) {
             statusEl.innerText = "[ UPLINK STATUS: ONLINE ]";
             statusEl.style.color = "#0f0";
         }
     };
+
+    ws.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            console.log("Data Received:", data);
+            if (data.alert_type) handleAlert(data);
+        } catch (e) {
+            console.log("Ignoring non-JSON heartbeat");
+        }
+    };
+
+    ws.onclose = (e) => {
+        console.log("Connection lost. Reason: ", e.reason);
+        const statusEl = document.getElementById('conn-status');
+        if (statusEl) {
+            statusEl.innerText = "[ UPLINK STATUS: RECONNECTING... ]";
+            statusEl.style.color = "orange";
+        }
+        // This is the most important part: Auto-retry every 2 seconds
+        setTimeout(connectWS, 2000);
+    };
+
+    ws.onerror = (err) => {
+        console.error("Socket Error:", err);
+        ws.close(); // Force a close so the onclose retry logic kicks in
+    };
+}
 
     ws.onmessage = async (event) => {
         try {
